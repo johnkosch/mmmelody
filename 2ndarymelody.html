@@ -1,0 +1,755 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Random Melody Generator — Verovio</title>
+  <script src="https://www.verovio.org/javascript/latest/verovio-toolkit-wasm.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 1000px; margin: 40px auto; padding: 20px; }
+    h1 { margin-bottom: 8px; }
+    p { color: #555; line-height: 1.4; }
+    button { padding: 10px 18px; margin: 10px 0 20px; font-size: 16px; cursor: pointer; }
+    #notation { width: 100%; overflow-x: auto; border: 1px solid #ddd; padding: 20px; box-sizing: border-box; min-height: 180px; }
+  </style>
+</head>
+<body>
+  <h1>Performance Assessment 3</h1>
+  <p>
+    Sight-singing with secondary dominants
+  </p>
+  <button id="generate">Generate New Melody</button>
+  <div id="notation"></div>
+
+<script>
+let toolkit;
+
+verovio.module.onRuntimeInitialized = () => {
+  toolkit = new verovio.toolkit();
+  toolkit.setOptions({
+    scale: 40,
+    adjustPageWidth: true,
+    pageMarginTop: 50,
+    pageMarginBottom: 50,
+    pageMarginLeft: 50,
+    pageMarginRight: 50
+  });
+  generateMelody();
+};
+
+
+// =========================================
+// HARMONIC MATERIAL: I - IV - V - I
+// =========================================
+
+const chordProgressions = [
+  [
+    ["c4","e4","g4","c5"], ["a3","c#4","e4","g4"],
+    ["d4","f4","a4","d5"], ["g4","b4","d5"],
+    ["c4","e4","g4","c5"]
+  ],
+  [
+    ["c4","e4","g4","c5"], ["b3","d#4","f#4"],
+    ["e4","g4","b4","e5"], ["g4","b4","d5"],
+    ["c4","e4","g4","c5"]
+  ],
+  [
+    ["c4","e4","g4","c5"], ["c4","e4","g4","bb4"],
+    ["f4","a4","c5","f5"], ["g4","b4","d5"],
+    ["c4","e4","g4","c5"]
+  ],
+  [
+    ["c4","e4","g4","c5"], ["a3","c4","e4","a4"],
+    ["d4","f#4","a4","c5"], ["g4","b4","d5"],
+    ["c4","e4","g4","c5"]
+  ],
+  [
+    ["c4","e4","g4","c5"], ["e4","g#4","b4","d5"],
+    ["a3","c4","e4","a4"], ["g4","b4","d5"],
+    ["c4","e4","g4","c5"]
+  ]
+];
+
+let chords = chordProgressions[0];
+
+function randomChoice(array) {
+  return array[Math.floor(Math.random() * array.length)];
+}
+
+function pitchNameToNumber(pitch) {
+  const names = {
+    "a3": -2, "b3": -1, "c4": 0, "c#4": 0.5, "d4": 1,
+    "d#4": 1.5, "e4": 2, "f4": 3, "f#4": 3.5, "g4": 4,
+    "g#4": 4.5, "a4": 5, "b4": 6, "bb4": 5.5, "c5": 7, "d5": 8,
+    "e5": 9, "f5": 10
+  };
+  return names[pitch];
+}
+
+function numberToPitchName(number) {
+  const names = {
+    "-2": "a3", "-1": "b3", 0: "c4", 1: "d4", 2: "e4",
+    3: "f4", 4: "g4", 5: "a4", 6: "b4", 7: "c5",
+    8: "d5", 9: "e5", 10: "f5"
+  };
+  return names[number];
+}
+
+
+// =========================================
+// RHYTHM CELLS
+//
+// Every base cell = exactly 2 beats.
+// No eighth notes in the base rhythm.
+// =========================================
+
+const rhythmCells = [
+  {
+    weight: 5,
+    notes: [
+      { type: "note", beats: 2, meiDur: 2 }
+    ]
+  },
+  {
+    weight: 7,
+    notes: [
+      { type: "note", beats: 1, meiDur: 4 },
+      { type: "note", beats: 1, meiDur: 4 }
+    ]
+  },
+  {
+    weight: 2,
+    notes: [
+      { type: "rest", beats: 1, meiDur: 4 },
+      { type: "note", beats: 1, meiDur: 4 }
+    ]
+  }
+];
+
+function randomRhythmCell(excludedCell = null) {
+  const availableCells =
+    rhythmCells.filter(cell => cell !== excludedCell);
+
+  const totalWeight = availableCells.reduce(
+    (sum, cell) => sum + cell.weight, 0
+  );
+
+  let random = Math.random() * totalWeight;
+
+  for (const cell of availableCells) {
+    random -= cell.weight;
+    if (random <= 0) {
+      return {
+        source: cell,
+        notes: cell.notes.map(note => ({ ...note }))
+      };
+    }
+  }
+
+  const fallback = availableCells[0];
+  return {
+    source: fallback,
+    notes: fallback.notes.map(note => ({ ...note }))
+  };
+}
+
+
+// =========================================
+// CHORD-TONE MELODY
+//
+// Only the I-IV-V-I harmony constrains the
+// base pitches, plus tonic beginning/ending.
+// No 2nd/3rd or scale-degree-7 rule here.
+// No tritone or sixth leaps in the base melody.
+// Octaves remain allowed.
+// =========================================
+
+function generatePitches(measures) {
+  const pitchValue = {
+    "a3": -2, "b3": -1, "c4": 0, "c#4": 0.5, "d4": 1,
+    "d#4": 1.5, "e4": 2, "f4": 3, "f#4": 3.5,
+    "g4": 4, "g#4": 4.5, "a4": 5, "bb4": 5.5, "b4": 6,
+    "c5": 7, "d5": 8, "e5": 9, "f5": 10
+  };
+
+  const rules = [
+    {
+      required: ["c#4"],
+      force: [
+        ["g4", "f4"]
+      ],
+      forbid: [
+        ["g4", "c#4"],
+        ["c#4", "f4"]
+      ]
+    },
+    {
+      required: ["d#4"],
+      force: [
+        ["c4", "b3"]
+      ],
+      forbid: [
+        ["g4", "d#4"],
+        ["d#4", "g4"]
+      ]
+    },
+    {
+      required: ["bb4"],
+      force: [
+        ["bb4", "a4"]
+      ],
+      forbid: [
+        ["e4", "bb4"],
+        ["e4", "a4"]
+      ]
+    },
+    {
+      required: ["f#4"],
+      forbid: [
+        ["c4", "f#4"],
+        ["f#4", "b4"]
+      ]
+    },
+    {
+      required: ["g#4"],
+      force: [
+        ["d4", "c4"]
+      ],
+      forbid: [
+        ["c4", "g#4"],
+        ["g#4", "c4"]
+      ]
+    }
+  ][selectedProgression];
+
+  // Work only with the first four measures here. Measure 5 is fixed.
+  const eventsByMeasure = measures.slice(0, 4).map(measure =>
+    measure.filter(event => event.type === "note")
+  );
+
+  function legalInterval(a, b) {
+    const distance = Math.abs(pitchValue[b] - pitchValue[a]);
+    if (distance > 3) return false;
+    if (
+      (a === "b4" && b === "f4") ||
+      (a === "f4" && b === "b4")
+    ) return false;
+    if (distance === 5 || distance === 6) return false;
+    return true;
+  }
+
+  function isForbidden(from, to) {
+    return (rules.forbid || []).some(pair =>
+      pair[0] === from && pair[1] === to
+    );
+  }
+
+  function forcedNext(from) {
+    const rule = (rules.force || []).find(pair => pair[0] === from);
+    return rule ? rule[1] : null;
+  }
+
+  function shuffle(array) {
+    return [...array].sort(() => Math.random() - 0.5);
+  }
+
+  // Generate one complete four-measure skeleton by recursive backtracking.
+  // Required tones are enforced as soon as possible, and all special
+  // measure-boundary rules are checked using the actual boundary notes.
+  const allEvents = [];
+  eventsByMeasure.forEach((events, m) => {
+    events.forEach((item, i) => allEvents.push({ item, m, i }));
+  });
+
+  const requiredPitch = rules.required[0];
+  const requiredMeasure =
+    selectedProgression === 3 ? 2 : 1;
+
+  function solve(index, previousPitch, requiredSeen) {
+    if (index === allEvents.length) {
+      return requiredSeen;
+    }
+
+    const { item, m, i } = allEvents[index];
+
+    let candidates = [...chords[m]];
+
+    // First note of the melody.
+    if (index === 0) {
+      candidates = ["c4"];
+    }
+
+    // First note of a later measure: apply boundary rules.
+    if (i === 0 && m > 0) {
+      const forced = forcedNext(previousPitch);
+      if (forced !== null) {
+        candidates = [forced];
+      } else {
+        candidates = candidates.filter(p => !isForbidden(previousPitch, p));
+      }
+    }
+
+    // Guarantee the required chromatic pitch appears in its measure.
+    if (m === requiredMeasure && !requiredSeen) {
+      const remainingInMeasure = eventsByMeasure[m].length - i;
+      if (remainingInMeasure === 1) {
+        candidates = [requiredPitch];
+      } else if (candidates.includes(requiredPitch)) {
+        // Put the required tone into the candidate pool without making
+        // every attempt use it at the first available event.
+        candidates = Math.random() < 0.5
+          ? [requiredPitch]
+          : shuffle(candidates);
+      }
+    }
+
+    candidates = shuffle(candidates);
+
+    for (const candidate of candidates) {
+      if (!legalInterval(previousPitch, candidate) && index !== 0) continue;
+
+      // Boundary-specific restrictions apply to the first note of a measure.
+      if (i === 0 && m > 0) {
+        const forced = forcedNext(previousPitch);
+        if (forced !== null && candidate !== forced) continue;
+        if (isForbidden(previousPitch, candidate)) continue;
+      }
+
+      // The "last pitch of measure -> first pitch of next measure" rules
+      // are checked naturally when the next event is selected.
+      item.pitch = candidate;
+
+      const seen =
+        requiredSeen ||
+        (m === requiredMeasure && candidate === requiredPitch);
+
+      if (solve(index + 1, candidate, seen)) return true;
+
+      delete item.pitch;
+    }
+
+    return false;
+  }
+
+  for (let attempt = 0; attempt < 100; attempt++) {
+    allEvents.forEach(x => delete x.item.pitch);
+
+    if (solve(0, "c4", false)) {
+      // Final measure: whole-note C, choosing the octave nearest the last
+      // melody pitch in measure 4.
+      const lastPitch = eventsByMeasure[3][eventsByMeasure[3].length - 1].pitch;
+      const finalC =
+        Math.abs(pitchValue[lastPitch] - pitchValue["c4"]) <=
+        Math.abs(pitchValue[lastPitch] - pitchValue["c5"])
+          ? "c4"
+          : "c5";
+
+      measures[4][0].pitch = finalC;
+      return;
+    }
+  }
+
+  throw new Error("Could not generate a melody satisfying all constraints.");
+}
+
+
+// =========================================
+// PASSING-TONE FILL
+//
+// C-E -> C-D-E
+// G-E -> G-F-E
+//
+// Only quarter + quarter pairs are filled so the
+// two-beat cell remains exactly two beats.
+// =========================================
+
+function fillThirdsWithPassingTones(measures) {
+  measures.forEach((measure, measureIndex) => {
+    const result = [];
+
+    for (let i = 0; i < measure.length; i++) {
+      const current = measure[i];
+      const next = measure[i + 1];
+
+      if (
+        current.type === "note" &&
+        next &&
+        next.type === "note" &&
+        current.beats === 1 &&
+        next.beats === 1 &&
+        Number.isInteger(pitchNameToNumber(current.pitch)) &&
+        Number.isInteger(pitchNameToNumber(next.pitch))
+      ) {
+        const currentNumber = pitchNameToNumber(current.pitch);
+        const nextNumber = pitchNameToNumber(next.pitch);
+
+        if (Math.abs(nextNumber - currentNumber) === 2) {
+          const passingNumber =
+            (currentNumber + nextNumber) / 2;
+
+          result.push({
+            type: "note",
+            pitch: current.pitch,
+            beats: 0.5,
+            meiDur: 8
+          });
+
+          let passingPitch = numberToPitchName(passingNumber);
+
+          // Progression 2 (C–B–Em–G–C): any F used as a passing tone
+          // in measure 3 is raised to F#. This changes passing tones only.
+          if (
+            selectedProgression === 1 &&
+            measureIndex === 2 &&
+            passingPitch === "f4"
+          ) {
+            passingPitch = "f#4";
+          }
+
+          result.push({
+            type: "note",
+            pitch: passingPitch,
+            beats: 0.5,
+            meiDur: 8
+          });
+
+          result.push({
+            type: "note",
+            pitch: next.pitch,
+            beats: 1,
+            meiDur: 4
+          });
+
+          i++;
+          continue;
+        }
+      }
+
+      result.push(current);
+    }
+
+    measure.length = 0;
+    measure.push(...result);
+  });
+}
+
+
+// =========================================
+// NEIGHBOR-TONE FILL
+//
+// C-C -> C-D-C
+// E-E -> E-F-E
+//
+// Uses eighth + eighth + quarter,
+// preserving the original two-beat span.
+//
+// The neighbor is diatonic and may be a
+// non-chord tone.
+// =========================================
+
+function addNeighborToRepeatedPitches(measures) {
+  measures.forEach(measure => {
+    const result = [];
+
+    for (let i = 0; i < measure.length; i++) {
+      const current = measure[i];
+      const next = measure[i + 1];
+
+      if (
+        current.type === "note" &&
+        next &&
+        next.type === "note" &&
+        current.pitch === next.pitch &&
+        current.beats === 1 &&
+        next.beats === 1 &&
+        !current.pitch.includes("#") &&
+        !current.pitch.includes("b")
+      ) {
+        const currentNumber = pitchNameToNumber(current.pitch);
+        const neighborCandidates = [];
+
+        if (currentNumber > 0) {
+          neighborCandidates.push(currentNumber - 1);
+        }
+
+        if (currentNumber < 7) {
+          neighborCandidates.push(currentNumber + 1);
+        }
+
+        const neighborNumber =
+          randomChoice(neighborCandidates);
+
+        const neighborPitch = numberToPitchName(neighborNumber);
+        if (!neighborPitch) {
+          result.push(current);
+          continue;
+        }
+
+        result.push({
+          type: "note",
+          pitch: current.pitch,
+          beats: 0.5,
+          meiDur: 8
+        });
+
+        result.push({
+          type: "note",
+          pitch: numberToPitchName(neighborNumber),
+          beats: 0.5,
+          meiDur: 8
+        });
+
+        result.push({
+          type: "note",
+          pitch: next.pitch,
+          beats: 1,
+          meiDur: 4
+        });
+
+        i++;
+        continue;
+      }
+
+      result.push(current);
+    }
+
+    measure.length = 0;
+    measure.push(...result);
+  });
+}
+
+
+// =========================================
+// COMPLETE MELODY
+// =========================================
+
+function chooseProgression() {
+  selectedProgression = Math.floor(Math.random() * chordProgressions.length);
+  chords = chordProgressions[selectedProgression];
+}
+
+// Each progression contains one chromatic chord tone that must actually
+// appear in the generated melody.
+const requiredMelodyPitches = {
+  0: { measure: 1, pitch: "c#4" },  // A7: C-sharp in m. 2
+  1: { measure: 1, pitch: "d#4" },  // B major: D-sharp in m. 2
+  2: { measure: 1, pitch: "bb4" },  // C7: B-flat in m. 2
+  3: { measure: 2, pitch: "f#4" },  // D7: F-sharp in m. 3
+  4: { measure: 1, pitch: "g#4" }   // E7: G-sharp in m. 2
+};
+
+function createRandomMelody() {
+  chooseProgression();
+  const measures = [];
+  let previousCell = null;
+
+  for (let measureNumber = 0; measureNumber < 4; measureNumber++) {
+    const firstChoice = randomRhythmCell(previousCell);
+    const firstCell = firstChoice.notes;
+    previousCell = firstChoice.source;
+
+    let secondCell;
+
+    const secondChoice = randomRhythmCell(previousCell);
+    secondCell = secondChoice.notes;
+    previousCell = secondChoice.source;
+
+    measures.push([...firstCell, ...secondCell]);
+  }
+
+  // Final measure: whole-note C (tonic).
+  measures.push([
+    { type: "note", pitch: "c4", beats: 4, meiDur: 1 }
+  ]);
+
+  // Base harmony.
+  generatePitches(measures);
+
+  // Embellishment layer.
+  fillThirdsWithPassingTones(measures);
+  addNeighborToRepeatedPitches(measures);
+
+  return measures;
+}
+
+
+// =========================================
+// MEI HELPERS
+// =========================================
+
+function pitchToMEI(pitch) {
+  const match = pitch.match(/^([a-g])([#b]?)(\d)$/);
+  if (!match) {
+    throw new Error(`Invalid pitch name: ${pitch}`);
+  }
+
+  return {
+    pname: match[1],
+    accidental: match[2],
+    oct: match[3]
+  };
+}
+
+function makeEvent(event) {
+  if (event.type === "rest") {
+    return `<rest dur="${event.meiDur}"/>`;
+  }
+
+  const pitch = pitchToMEI(event.pitch);
+
+  let accidentalMarkup = "";
+  if (pitch.accidental === "#") accidentalMarkup = ' accid="s"';
+  if (pitch.accidental === "b") accidentalMarkup = ' accid="f"';
+
+  return `
+    <note
+      pname="${pitch.pname}"
+      oct="${pitch.oct}"
+      dur="${event.meiDur}"${accidentalMarkup}
+    />
+  `;
+}
+
+
+// =========================================
+// CELL RENDERING
+//
+// Eighth pairs are explicitly beamed.
+// =========================================
+
+function renderCell(cell) {
+  let output = "";
+  let i = 0;
+
+  while (i < cell.length) {
+    const event = cell[i];
+    const next = cell[i + 1];
+
+    if (
+      event.type === "note" &&
+      event.beats === 0.5 &&
+      next &&
+      next.type === "note" &&
+      next.beats === 0.5
+    ) {
+      output += `
+        <beam>
+          ${makeEvent(event)}
+          ${makeEvent(next)}
+        </beam>
+      `;
+      i += 2;
+      continue;
+    }
+
+    output += makeEvent(event);
+    i++;
+  }
+
+  return output;
+}
+
+
+// =========================================
+// MELODY -> MEI
+// =========================================
+
+function melodyToMEI(measures) {
+  let measureMarkup = "";
+
+  measures.forEach((measure, index) => {
+    let firstCell = [];
+    let secondCell = [];
+    let beats = 0;
+
+    for (const event of measure) {
+      if (beats < 2) {
+        firstCell.push(event);
+      } else {
+        secondCell.push(event);
+      }
+      beats += event.beats;
+    }
+
+    measureMarkup += `
+      <measure n="${index + 1}">
+        <staff n="1">
+          <layer n="1">
+            ${renderCell(firstCell)}
+            ${renderCell(secondCell)}
+          </layer>
+        </staff>
+      </measure>
+    `;
+  });
+
+  return `
+    <?xml version="1.0" encoding="UTF-8"?>
+
+    <mei
+      xmlns="http://www.music-encoding.org/ns/mei"
+      meiversion="5.0">
+
+      <meiHead>
+        <fileDesc>
+          <titleStmt>
+            <title>Random Melody</title>
+          </titleStmt>
+          <pubStmt/>
+        </fileDesc>
+      </meiHead>
+
+      <music>
+        <body>
+          <mdiv>
+            <score>
+              <scoreDef meter.count="4" meter.unit="4">
+                <staffGrp>
+                  <staffDef
+                    n="1"
+                    lines="5"
+                    clef.shape="G"
+                    clef.line="2"
+                  />
+                </staffGrp>
+              </scoreDef>
+
+              <section>
+                ${measureMarkup}
+              </section>
+            </score>
+          </mdiv>
+        </body>
+      </music>
+    </mei>
+  `;
+}
+
+
+// =========================================
+// GENERATE + RENDER
+// =========================================
+
+function generateMelody() {
+  try {
+    const melody = createRandomMelody();
+    console.log("Generated melody:", melody);
+
+    const mei = melodyToMEI(melody);
+    console.log("MEI:", mei);
+
+    const svg = toolkit.renderData(mei, {});
+    document.getElementById("notation").innerHTML = svg;
+  } catch (error) {
+    console.error(error);
+    document.getElementById("notation").innerHTML =
+      "<p>There was an error generating the melody. Check the browser console.</p>";
+  }
+}
+
+document
+  .getElementById("generate")
+  .addEventListener("click", generateMelody);
+</script>
+</body>
+</html>
